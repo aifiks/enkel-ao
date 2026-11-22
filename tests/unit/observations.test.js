@@ -462,17 +462,41 @@ describe('renderObservations besøk', () => {
     const saveState = vi.fn();
     renderObservations(observations, obsListEl, {}, saveState);
 
-    const clockBtn = obsListEl.querySelector('.obs-group-time-btn');
-    expect(clockBtn).not.toBeNull();
-    expect(clockBtn.getAttribute('aria-label')).toBe('Set klokkeslett');
+    expect(obsListEl.querySelector('.obs-group-time-btn')).toBeNull();
+    const metaEl = obsListEl.querySelector('.obs-group-meta');
+    const editBtn = obsListEl.querySelector('.obs-group-edit-btn');
+    expect(editBtn).not.toBeNull();
+    expect(metaEl.nextElementSibling).toBe(editBtn);
+    expect(editBtn.getAttribute('aria-label')).toBe('Rediger lokalitet, aktivitet eller klokkeslett for alle observasjonar i gruppa');
 
-    clockBtn.click();
-    const modal = document.getElementById('time-modal');
+    editBtn.click();
+    const modal = document.getElementById('group-edit-modal');
     expect(modal).not.toBeNull();
-    expect(modal.querySelector('h3').textContent).toBe('🕐 Set klokkeslett');
+    expect(modal.querySelector('h3').textContent).toBe('Rediger gruppe');
     expect(modal.textContent).toContain('Frå');
     expect(modal.textContent).toContain('Til');
-    expect(modal.querySelector('#time-modal-apply').textContent).toBe('Set på alle');
-    modal.remove();
+    expect(modal.querySelector('#group-edit-place')).not.toBeNull();
+    expect(modal.querySelector('#group-edit-activity')).not.toBeNull();
+    const saveBtn = modal.querySelector('#group-edit-save');
+    expect(saveBtn.textContent).toBe('Lagra');
+    expect(saveBtn.disabled).toBe(true);
+
+    // Endre lokalitet og klokkeslett til gyldig tidspunkt i fortiden
+    const placeInput = modal.querySelector('#group-edit-place');
+    placeInput.value = 'Ny lokalitet';
+    placeInput.dispatchEvent(new Event('input'));
+    const fraInput = modal.querySelector('#group-edit-fra');
+    const tilInput = modal.querySelector('#group-edit-til');
+    fraInput.value = '00:05';
+    fraInput.dispatchEvent(new Event('input'));
+    tilInput.value = '00:15';
+    tilInput.dispatchEvent(new Event('input'));
+    expect(saveBtn.disabled).toBe(false);
+
+    saveBtn.click();
+    expect(document.getElementById('group-edit-modal')).toBeNull();
+    expect(observations[0].placeName).toBe('Ny lokalitet');
+    expect(observations[0].timestamp).toContain('T00:05:00');
+    expect(observations[0].tilKlokkeslett).toContain('T00:15:00');
   });
 });

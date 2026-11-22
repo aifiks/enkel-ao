@@ -1141,6 +1141,30 @@ body.theme-light #search:disabled::placeholder {
         color: rgba(191, 219, 254, 0.95);
       }
 
+      .obs-group-edit-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 34px;
+        min-height: 34px;
+        padding: 4px;
+        margin: 0;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        font-size: 16px;
+        line-height: 1;
+        cursor: pointer;
+        opacity: 0.85;
+        transition: opacity 0.15s, background 0.15s;
+      }
+
+      .obs-group-edit-btn:hover,
+      .obs-group-edit-btn:focus-visible {
+        opacity: 1;
+        background: var(--accent-soft);
+      }
+
       .obs-group-actions {
         display: flex;
         align-items: center;

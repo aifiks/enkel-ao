@@ -32,8 +32,8 @@ import { DEFAULT_MAP_CENTER, setAoSiteSuggestions, initLocation, openMap, openMa
 // timer, uten noen SyntaxError som varsler om det (funksjonene fantes jo
 // allerede - bare med gammel logikk). Se species-search.js/
 // observation-commit.js under for samme fiks, og docs/CLAUDE.md.
-import { renderObservations } from './observations.js?v=v1.61.6';
-import { getVisitTimeSpan, isVisitLocked, visitExists } from './visits.js';
+import { renderObservations, showGroupEditModal } from './observations.js?v=v1.61.6';
+import { getVisitTimeSpan, isVisitLocked, visitExists, getObservationVisitKey } from './visits.js';
 
 // Nye moduler
 import { updateSectionStates, pulseSearchFieldAndFocus } from './form-state.js';
@@ -1234,14 +1234,31 @@ async function init() {
 
   // Sjekk om bruker har valgt lokalitet fra kartet
   const selectedLocation = localStorage.getItem('selectedLocation');
+  let pendingGroupEdit = null;
   if (selectedLocation) {
-    avsluttEtterregistrering();
-    appState.currentPlaceName = selectedLocation;
     const selectedLocationId = localStorage.getItem('selectedLocationId');
-    appState.currentPlaceId = selectedLocationId ? parseInt(selectedLocationId, 10) || selectedLocationId : null;
-    if (dom.placeInput) {
-      dom.placeInput.value = selectedLocation;
-      dom.placeInput.dataset.autofilled = 'true';
+    let pendingGroupVisitKey = null;
+    try {
+      pendingGroupVisitKey = sessionStorage.getItem('pendingGroupEditVisitKey');
+      if (pendingGroupVisitKey) sessionStorage.removeItem('pendingGroupEditVisitKey');
+    } catch {
+      // sessionStorage utilgjengelig
+    }
+
+    if (pendingGroupVisitKey) {
+      pendingGroupEdit = {
+        visitKey: pendingGroupVisitKey,
+        name: selectedLocation,
+        id: selectedLocationId ? parseInt(selectedLocationId, 10) || selectedLocationId : null,
+      };
+    } else {
+      avsluttEtterregistrering();
+      appState.currentPlaceName = selectedLocation;
+      appState.currentPlaceId = selectedLocationId ? parseInt(selectedLocationId, 10) || selectedLocationId : null;
+      if (dom.placeInput) {
+        dom.placeInput.value = selectedLocation;
+        dom.placeInput.dataset.autofilled = 'true';
+      }
     }
     localStorage.removeItem('selectedLocation');
     localStorage.removeItem('selectedLocationId');
@@ -1272,8 +1289,8 @@ async function init() {
     collapseLocation();
   }
 
-  // Hvis lokalitet ble valgt fra kart, sett fokus på art-feltet
-  if (selectedLocation) {
+  // Hvis lokalitet ble valgt fra kart for hovedskjemaet, sett fokus på art-feltet
+  if (selectedLocation && !pendingGroupEdit) {
     pulseSearchFieldAndFocus(appState, dom);
     varsleLokalitetValgt();
   }
@@ -1306,6 +1323,36 @@ async function init() {
   );
 
   doRenderObservations();
+
+  if (pendingGroupEdit) {
+    const groupItems = appState.observations.filter(o => getObservationVisitKey(o) === pendingGroupEdit.visitKey);
+    if (groupItems.length > 0) {
+      let earliestMs = Infinity;
+      let latestMs = -Infinity;
+      groupItems.forEach((o) => {
+        const s = o.startDateTime ? new Date(o.startDateTime).getTime() : NaN;
+        const e = o.endDateTime ? new Date(o.endDateTime).getTime() : NaN;
+        if (!isNaN(s) && s < earliestMs) earliestMs = s;
+        if (!isNaN(e) && e > latestMs) latestMs = e;
+      });
+      const pad2 = n => String(n).padStart(2, '0');
+      const fmt = d => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+      const defaultFra = earliestMs < Infinity ? fmt(new Date(earliestMs)) : '';
+      const defaultTil = latestMs > -Infinity ? fmt(new Date(latestMs)) : '';
+      const buttons = { exportBtn: dom.exportBtn, copyBtn: dom.copyBtn, copyOpenBtn: dom.copyOpenBtn, shareBtn: dom.shareBtn, clearBtn: dom.clearBtn, aoDirectBtn: dom.aoDirectBtn };
+      showGroupEditModal(
+        groupItems,
+        defaultFra,
+        defaultTil,
+        groupItems[0].placeName || '',
+        appState.observations,
+        dom.obsListEl,
+        buttons,
+        saveState,
+        { name: pendingGroupEdit.name, id: pendingGroupEdit.id },
+      );
+    }
+  }
 
   try {
     const activities = await loadActivities();

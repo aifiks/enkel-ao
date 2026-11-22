@@ -3,6 +3,7 @@
  */
 
 import { defaultCoObservers, loadMedobs, speciesDisplayName, activityDisplayName, activityBokmalName, loadAllowUnknownCount } from './storage.js?v=v1.61.6';
+import { loadActivities } from './api.js?v=v1.61.6';
 import { showToast } from './ui.js';
 import { t } from './i18n.js?v=v1.61.6';
 import { toLocalISOString } from './utils.js';
@@ -10,121 +11,308 @@ import { getObservationVisitKey, setVisitLocked } from './visits.js';
 import { openEditModal } from './edit-modal.js';
 
 /**
- * Vis modal for å sette fra/til-klokkeslett på alle obs i en gruppe
+ * Vis modal for å redigere lokalitet, aktivitet og/eller klokkeslett for alle obs i en gruppe
  */
-function showTimeModal(groupItems, defaultFra, defaultTil, groupName, observations, obsListEl, buttons, saveState) {
-  // Fjern evt. eksisterende modal
-  const existing = document.getElementById('time-modal');
+export function showGroupEditModal(groupItems, defaultFra, defaultTil, groupName, observations, obsListEl, buttons, saveState, prefillPlace = null) {
+  const existing = document.getElementById('group-edit-modal');
   if (existing) existing.remove();
 
   const overlay = document.createElement('div');
-  overlay.id = 'time-modal';
+  overlay.id = 'group-edit-modal';
   Object.assign(overlay.style, {
     position: 'fixed', inset: '0', zIndex: '1000',
-    background: 'rgba(0,0,0,0.5)', display: 'flex',
+    background: 'rgba(0,0,0,0.55)', display: 'flex',
     alignItems: 'center', justifyContent: 'center',
+    padding: '16px',
   });
 
   const box = document.createElement('div');
   Object.assign(box.style, {
-    background: 'var(--card-bg, #1e293b)', borderRadius: '12px', padding: '20px',
-    maxWidth: '340px', width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+    background: 'var(--card-bg, #1e293b)', borderRadius: '14px', padding: '20px',
+    maxWidth: '400px', width: '100%', boxShadow: '0 12px 36px rgba(0,0,0,0.35)',
+    color: 'var(--text)', boxSizing: 'border-box',
   });
 
   box.innerHTML = `
-    <h3 style="margin:0 0 4px 0;font-size:1.05em;">🕐 ${t('observations.time_modal.heading')}</h3>
-    <p style="margin:0 0 14px 0;font-size:0.8em;color:var(--muted);line-height:1.3;"></p>
-    <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;">
-      <div style="flex:1;">
-        <label style="font-size:0.8em;color:var(--muted);display:block;margin-bottom:4px;">${t('observations.time_modal.from')}</label>
-        <input type="time" id="time-modal-fra" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border,rgba(148,163,184,0.25));background:var(--card-bg);color:var(--text);font-size:16px;box-sizing:border-box;" />
-      </div>
-      <div style="flex:1;">
-        <label style="font-size:0.8em;color:var(--muted);display:block;margin-bottom:4px;">Til</label>
-        <input type="time" id="time-modal-til" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border,rgba(148,163,184,0.25));background:var(--card-bg);color:var(--text);font-size:16px;box-sizing:border-box;" />
+    <h3 style="margin:0 0 4px 0;font-size:1.15em;">${t('observations.group_edit.heading')}</h3>
+    <p style="margin:0 0 14px 0;font-size:0.82em;color:var(--muted);line-height:1.3;"></p>
+
+    <div style="margin-bottom:14px;">
+      <label for="group-edit-place" style="font-size:0.88em;color:var(--text);display:block;margin-bottom:6px;font-weight:500;">${t('observations.group_edit.place_label')}</label>
+      <div style="display:flex;gap:8px;align-items:center;position:relative;">
+        <input type="text" id="group-edit-place" autocomplete="off" placeholder="${t('observations.group_edit.place_placeholder')}"
+          style="flex:1;min-width:0;min-height:44px;padding:8px 10px;border-radius:10px;border:1px solid var(--border,rgba(148,163,184,0.35));background:var(--card-bg);color:var(--text);font-size:16px;box-sizing:border-box;" />
+        <button type="button" id="group-edit-gps-btn" title="${t('observations.group_edit.gps_title')}" aria-label="${t('observations.group_edit.gps_title')}"
+          style="width:44px;height:44px;min-width:44px;border-radius:10px;border:1px solid var(--border,rgba(148,163,184,0.35));background:rgba(148,163,184,0.1);color:var(--text);cursor:pointer;font-size:18px;display:inline-flex;align-items:center;justify-content:center;">📍</button>
+        <button type="button" id="group-edit-map-btn" title="${t('observations.group_edit.map_title')}" aria-label="${t('observations.group_edit.map_title')}"
+          style="width:44px;height:44px;min-width:44px;border-radius:10px;border:1px solid var(--border,rgba(148,163,184,0.35));background:rgba(148,163,184,0.1);color:var(--text);cursor:pointer;font-size:18px;display:inline-flex;align-items:center;justify-content:center;">🗺️</button>
+        <div id="group-edit-place-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;margin-top:4px;max-height:200px;overflow-y:auto;background:var(--card-bg,#1e293b);border:1px solid var(--border,rgba(148,163,184,0.35));border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);z-index:1010;"></div>
       </div>
     </div>
-    <div style="display:flex;gap:8px;justify-content:flex-end;">
-      <button type="button" id="time-modal-cancel" style="padding:8px 16px;border:1px solid var(--border,rgba(148,163,184,0.25));border-radius:6px;background:transparent;color:var(--text);cursor:pointer;font-size:0.9em;">Avbryt</button>
-      <button type="button" id="time-modal-apply" style="padding:8px 16px;border:none;border-radius:6px;background:var(--accent,#3b82f6);color:white;cursor:pointer;font-size:0.9em;font-weight:500;">${t('observations.time_modal.apply')}</button>
+
+    <hr style="border:none;border-top:1px solid var(--border,rgba(148,163,184,0.2));margin:14px 0;" />
+
+    <div style="margin-bottom:14px;">
+      <label for="group-edit-activity" style="font-size:0.88em;color:var(--text);display:block;margin-bottom:6px;font-weight:500;">${t('observations.group_edit.activity_label')}</label>
+      <select id="group-edit-activity"
+        style="width:100%;min-height:44px;padding:8px 10px;border-radius:10px;border:1px solid var(--border,rgba(148,163,184,0.35));background:var(--card-bg);color:var(--text);font-size:16px;box-sizing:border-box;">
+        <option value="">${t('observations.group_edit.activity_unchanged')}</option>
+      </select>
+    </div>
+
+    <hr style="border:none;border-top:1px solid var(--border,rgba(148,163,184,0.2));margin:14px 0;" />
+
+    <div style="margin-bottom:18px;">
+      <span style="font-size:0.88em;color:var(--text);display:block;margin-bottom:6px;font-weight:500;">${t('observations.group_edit.time_label')}</span>
+      <div style="display:flex;gap:12px;align-items:center;">
+        <div style="flex:1;">
+          <label for="group-edit-fra" style="font-size:0.8em;color:var(--muted);display:block;margin-bottom:4px;">${t('observations.time_modal.from')}</label>
+          <input type="time" id="group-edit-fra" style="width:100%;min-height:44px;padding:8px;border-radius:10px;border:1px solid var(--border,rgba(148,163,184,0.35));background:var(--card-bg);color:var(--text);font-size:16px;box-sizing:border-box;" />
+        </div>
+        <div style="flex:1;">
+          <label for="group-edit-til" style="font-size:0.8em;color:var(--muted);display:block;margin-bottom:4px;">Til</label>
+          <input type="time" id="group-edit-til" style="width:100%;min-height:44px;padding:8px;border-radius:10px;border:1px solid var(--border,rgba(148,163,184,0.35));background:var(--card-bg);color:var(--text);font-size:16px;box-sizing:border-box;" />
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:10px;">
+      <button type="button" id="group-edit-cancel" style="flex:1;min-height:44px;padding:10px 16px;border:1px solid var(--border,rgba(148,163,184,0.35));border-radius:10px;background:transparent;color:var(--text);cursor:pointer;font-size:16px;font-weight:500;">Avbryt</button>
+      <button type="button" id="group-edit-save" disabled style="flex:1;min-height:44px;padding:10px 16px;border:none;border-radius:10px;background:var(--accent,#3b82f6);color:white;cursor:pointer;font-size:16px;font-weight:600;opacity:0.45;">${t('observations.group_edit.save')}</button>
     </div>
   `;
+
   const obsOrd = groupItems.length === 1 ? t('observations.word_singular') : t('observations.word_plural');
   box.querySelector('p').textContent = `${groupName} — ${groupItems.length} ${obsOrd}`;
 
   overlay.appendChild(box);
   document.body.appendChild(overlay);
 
-  const fraInput = document.getElementById('time-modal-fra');
-  const tilInput = document.getElementById('time-modal-til');
+  const placeInput = document.getElementById('group-edit-place');
+  const placeDropdown = document.getElementById('group-edit-place-dropdown');
+  const gpsBtn = document.getElementById('group-edit-gps-btn');
+  const mapBtn = document.getElementById('group-edit-map-btn');
+  const activitySelect = document.getElementById('group-edit-activity');
+  const fraInput = document.getElementById('group-edit-fra');
+  const tilInput = document.getElementById('group-edit-til');
+  const cancelBtn = document.getElementById('group-edit-cancel');
+  const saveBtn = document.getElementById('group-edit-save');
+
   fraInput.value = defaultFra;
   tilInput.value = defaultTil;
-  const cancelBtn = document.getElementById('time-modal-cancel');
-  const applyBtn = document.getElementById('time-modal-apply');
+
+  let selectedPlaceId = null;
+  let selectedPlaceIsAuto = false;
+  if (prefillPlace && prefillPlace.name) {
+    placeInput.value = prefillPlace.name;
+    selectedPlaceId = prefillPlace.id ?? null;
+    selectedPlaceIsAuto = true;
+  }
+
+  function updateSaveBtnState() {
+    const hasPlace = placeInput.value.trim().length > 0;
+    const hasActivity = activitySelect.value !== '';
+    const timeChanged = fraInput.value !== defaultFra || tilInput.value !== defaultTil;
+    const enabled = hasPlace || hasActivity || timeChanged;
+    saveBtn.disabled = !enabled;
+    saveBtn.style.opacity = enabled ? '1' : '0.45';
+    saveBtn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+  }
+  updateSaveBtnState();
+
+  loadActivities().then((activities) => {
+    (activities || []).forEach((a) => {
+      const opt = document.createElement('option');
+      opt.value = a.label;
+      opt.textContent = activityDisplayName(a.label);
+      activitySelect.appendChild(opt);
+    });
+  }).catch(() => {});
+
+  function renderPlaceDropdown(items) {
+    placeDropdown.innerHTML = '';
+    if (!items || !items.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:10px 12px;font-size:0.88em;color:var(--muted);';
+      empty.textContent = t('observations.group_edit.no_sites');
+      placeDropdown.appendChild(empty);
+      placeDropdown.style.display = 'block';
+      return;
+    }
+    items.slice(0, 15).forEach((site) => {
+      const name = site.value || site.name || '';
+      if (!name) return;
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.style.cssText = 'display:block;width:100%;text-align:left;padding:10px 12px;border:none;border-bottom:1px solid var(--border,rgba(148,163,184,0.15));background:transparent;color:var(--text);cursor:pointer;font-size:15px;';
+      const prefix = site.isMine ? '⭐ ' : (site.isPrivate ? '👤 ' : (site.isSuper ? '🏷️ ' : ''));
+      const sub = site.subvalue || [site.municipality, site.county].filter(Boolean).join(', ');
+      row.textContent = prefix + name + (sub ? ` (${sub})` : '');
+      row.addEventListener('click', () => {
+        placeInput.value = name;
+        selectedPlaceId = site.id ?? null;
+        selectedPlaceIsAuto = true;
+        placeDropdown.style.display = 'none';
+        updateSaveBtnState();
+      });
+      placeDropdown.appendChild(row);
+    });
+    placeDropdown.style.display = 'block';
+  }
+
+  let searchTimer = null;
+  placeInput.addEventListener('input', () => {
+    selectedPlaceId = null;
+    selectedPlaceIsAuto = false;
+    updateSaveBtnState();
+    clearTimeout(searchTimer);
+    const term = placeInput.value.trim();
+    if (term.length < 2) {
+      placeDropdown.style.display = 'none';
+      return;
+    }
+    searchTimer = setTimeout(async () => {
+      try {
+        const tokens = JSON.parse(localStorage.getItem('ao_tokens') || '{}');
+        const headers = {};
+        if (tokens.loginToken) headers['X-AO-Login-Token'] = tokens.loginToken;
+        if (tokens.authCookie) headers['X-AO-Auth-Cookie'] = tokens.authCookie;
+        if (tokens.userId) headers['X-AO-User-Id'] = tokens.userId;
+        const resp = await fetch(`/api/ao-autocomplete?term=${encodeURIComponent(term)}`, { headers });
+        const data = await resp.json();
+        if (placeInput.value.trim() === term) {
+          renderPlaceDropdown(data.results || []);
+        }
+      } catch {
+        // Ignorer nettverksfeil — bruker kan fortsatt skrive stedsnavn manuelt
+      }
+    }, 250);
+  });
+
+  if (gpsBtn) {
+    gpsBtn.addEventListener('click', () => {
+      if (!navigator.geolocation) {
+        showToast(t('observations.group_edit.no_sites'));
+        return;
+      }
+      gpsBtn.disabled = true;
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          try {
+            const resp = await fetch(`/api/ao-sites?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&size=1500`);
+            const data = await resp.json();
+            const sites = Array.isArray(data) ? data : (data.sites || []);
+            renderPlaceDropdown(sites);
+          } catch {
+            renderPlaceDropdown([]);
+          } finally {
+            gpsBtn.disabled = false;
+          }
+        },
+        () => {
+          gpsBtn.disabled = false;
+          showToast(t('observations.group_edit.no_sites'));
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    });
+  }
+
+  if (mapBtn) {
+    mapBtn.addEventListener('click', () => {
+      try {
+        const visitKey = groupItems[0] ? getObservationVisitKey(groupItems[0]) : '';
+        if (visitKey) sessionStorage.setItem('pendingGroupEditVisitKey', visitKey);
+      } catch {
+        // sessionStorage utilgjengelig
+      }
+      window.location.href = '/map.html';
+    });
+  }
 
   function close() { overlay.remove(); }
-  function resetBorder(el) { el.style.borderColor = ''; }
+  function resetBorder(el) { el.style.borderColor = 'var(--border,rgba(148,163,184,0.35))'; }
 
-  fraInput.addEventListener('input', () => resetBorder(fraInput));
-  tilInput.addEventListener('input', () => resetBorder(tilInput));
+  activitySelect.addEventListener('change', updateSaveBtnState);
+  fraInput.addEventListener('input', () => { resetBorder(fraInput); updateSaveBtnState(); });
+  tilInput.addEventListener('input', () => { resetBorder(tilInput); updateSaveBtnState(); });
 
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+    else if (!placeInput.contains(e.target) && !placeDropdown.contains(e.target) && e.target !== gpsBtn) {
+      placeDropdown.style.display = 'none';
+    }
+  });
   cancelBtn.addEventListener('click', close);
 
-  applyBtn.addEventListener('click', () => {
+  saveBtn.addEventListener('click', () => {
+    const newPlace = placeInput.value.trim();
+    const newActivity = activitySelect.value;
     const fraVal = fraInput.value;
     const tilVal = tilInput.value;
+    const timeChanged = fraVal !== defaultFra || tilVal !== defaultTil;
 
-    if (!fraVal) { fraInput.focus(); return; }
-
-    const now = new Date();
-    const [fraH, fraM] = fraVal.split(':').map(Number);
-    const [tilH, tilM] = tilVal ? tilVal.split(':').map(Number) : [];
-
-    // Regn ut resultatet for hver obs FØR noe skrives. Gruppen kan spenne over flere
-    // datoer, og da sier første obs ingenting om de andre — tidligere validerte vi bare
-    // mot første obs, mens klokkeslettet ble skrevet på hver obs sin egen dato. En obs
-    // med dagens dato kunne dermed få et tidspunkt frem i tid som AO underkjenner.
-    const beregnet = groupItems.map((obs) => {
-      const baseDate = obs.timestamp ? new Date(obs.timestamp) : new Date();
-      const fraDate = new Date(baseDate);
-      fraDate.setHours(fraH, fraM, 0, 0);
-      let tilDate = null;
-      if (tilVal) {
-        tilDate = new Date(baseDate);
-        tilDate.setHours(tilH, tilM, 0, 0);
+    let beregnetTid = null;
+    if (timeChanged) {
+      if (!fraVal) {
+        fraInput.focus();
+        return;
       }
-      return { obs, fraDate, tilDate };
-    });
-
-    if (beregnet.some((b) => b.fraDate > now)) {
-      fraInput.style.borderColor = '#ef4444';
-      showToast(t('observations.time_modal.from_in_future', { tid: fraVal }));
-      fraInput.focus();
-      return;
+      const now = new Date();
+      const [fraH, fraM] = fraVal.split(':').map(Number);
+      const [tilH, tilM] = tilVal ? tilVal.split(':').map(Number) : [];
+      beregnetTid = groupItems.map((obs) => {
+        const baseDate = obs.timestamp ? new Date(obs.timestamp) : new Date();
+        const fraDate = new Date(baseDate);
+        fraDate.setHours(fraH, fraM, 0, 0);
+        let tilDate = null;
+        if (tilVal) {
+          tilDate = new Date(baseDate);
+          tilDate.setHours(tilH, tilM, 0, 0);
+        }
+        return { obs, fraDate, tilDate };
+      });
+      if (beregnetTid.some((b) => b.fraDate > now)) {
+        fraInput.style.borderColor = '#ef4444';
+        showToast(t('observations.time_modal.from_in_future', { tid: fraVal }));
+        fraInput.focus();
+        return;
+      }
+      if (beregnetTid.some((b) => b.tilDate && b.tilDate > now)) {
+        tilInput.style.borderColor = '#ef4444';
+        showToast(t('observations.time_modal.to_in_future', { tid: tilVal }));
+        tilInput.focus();
+        return;
+      }
     }
 
-    if (beregnet.some((b) => b.tilDate && b.tilDate > now)) {
-      tilInput.style.borderColor = '#ef4444';
-      showToast(t('observations.time_modal.to_in_future', { tid: tilVal }));
-      tilInput.focus();
-      return;
+    if (newPlace) {
+      groupItems.forEach((obs) => {
+        obs.placeName = newPlace;
+        obs.placeId = selectedPlaceIsAuto ? selectedPlaceId : null;
+        delete obs.rarityWarning;
+      });
     }
-
-    beregnet.forEach(({ obs, fraDate, tilDate }) => {
-      obs.timestamp = toLocalISOString(fraDate);
-      if (tilDate) {
-        obs.tilKlokkeslett = toLocalISOString(tilDate);
-      }
-    });
+    if (newActivity) {
+      const canonicalAct = activityBokmalName(newActivity);
+      groupItems.forEach((obs) => {
+        obs.activity = canonicalAct;
+      });
+    }
+    if (beregnetTid) {
+      beregnetTid.forEach(({ obs, fraDate, tilDate }) => {
+        obs.timestamp = toLocalISOString(fraDate);
+        if (tilDate) {
+          obs.tilKlokkeslett = toLocalISOString(tilDate);
+        }
+      });
+    }
 
     saveState();
     renderObservations(observations, obsListEl, buttons, saveState);
     close();
-    showToast(t('observations.time_modal.applied', { count: groupItems.length }));
+    showToast(t('observations.group_edit.saved', { count: groupItems.length }), { raw: true });
   });
-
-  fraInput.focus();
 }
 
 /**
@@ -253,7 +441,21 @@ export function renderObservations(observations, obsListEl, buttons, saveState) 
     const artOrd = uniqueSpecies.size === 1 ? t('observations.species_word_singular') : t('observations.species_word_plural');
     metaSpan.textContent = `${uniqueSpecies.size} ${artOrd}`;
 
+    const editGroupBtn = document.createElement('button');
+    editGroupBtn.type = 'button';
+    editGroupBtn.className = 'obs-group-edit-btn';
+    editGroupBtn.textContent = '✏️';
+    editGroupBtn.setAttribute('aria-label', t('observations.group_edit.btn_title'));
+    editGroupBtn.title = t('observations.group_edit.btn_title');
+    editGroupBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const fra = earliestMs < Infinity ? fmt(new Date(earliestMs)) : '';
+      const til = latestMs > -Infinity ? fmt(new Date(latestMs)) : '';
+      showGroupEditModal(group.items, fra, til, group.key, observations, obsListEl, buttons, saveState);
+    });
+
     nameWrap.appendChild(metaSpan);
+    nameWrap.appendChild(editGroupBtn);
     groupHeader.appendChild(nameWrap);
 
     const groupActions = document.createElement('div');
@@ -317,25 +519,6 @@ export function renderObservations(observations, obsListEl, buttons, saveState) 
     });
     groupActions.appendChild(lockBtn);
 
-    // Klokkeikon for å sette tid på alle obs i gruppen
-    const clockBtn = document.createElement('button');
-    clockBtn.type = 'button';
-    // Tydelig SVG-klokke (visere mot 10:10) i stedet for 🕐-emoji, som blir
-    // utydelig og plattformavhengig i småformat.
-    clockBtn.innerHTML = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.2 1.9"/></svg>';
-    clockBtn.setAttribute('aria-label', t('observations.time_modal.heading'));
-    clockBtn.title = t('observations.clock_btn_title');
-    clockBtn.className = 'obs-group-time-btn';
-
-    const defaultFra = earliestMs < Infinity ? fmt(new Date(earliestMs)) : '';
-    const defaultTil = latestMs > -Infinity ? fmt(new Date(latestMs)) : '';
-    const groupItems = group.items;
-
-    clockBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      showTimeModal(groupItems, defaultFra, defaultTil, group.key, observations, obsListEl, buttons, saveState);
-    });
-    groupActions.appendChild(clockBtn);
     groupHeader.appendChild(groupActions);
     groupCell.appendChild(groupHeader);
 
